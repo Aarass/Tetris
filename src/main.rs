@@ -4,14 +4,14 @@ mod consts;
 mod pieces;
 use pieces::*;
 
-use crate::consts::TILE_SIZE;
+use crate::consts::{COLS, ROWS, TILE_SIZE};
 
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(get_window_settings()))
         .add_systems(Startup, setup)
         .add_systems(Update, handle_input)
-        .add_systems(Update, apply_gravity)
+        // .add_systems(Update, apply_gravity)
         // .add_systems(Update, update_random_field)
         .run();
 }
@@ -21,7 +21,15 @@ fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
-    commands.spawn(Camera2d);
+    commands.spawn((
+        Camera2d,
+        Transform::from_xyz(
+            TILE_SIZE * ROWS as f32 / 2.0,
+            -TILE_SIZE * COLS as f32 / 2.0,
+            0.0,
+        ),
+    ));
+
     commands.insert_resource(Tick(Timer::from_seconds(1.0, TimerMode::Repeating)));
 
     let current_shape = LShape::new(&mut meshes);
@@ -143,7 +151,7 @@ struct Tick(Timer);
 fn get_window_settings() -> WindowPlugin {
     WindowPlugin {
         primary_window: Some(Window {
-            resolution: WindowResolution::new(TILE_SIZE as u32 * 10, TILE_SIZE as u32 * 20)
+            resolution: WindowResolution::new(TILE_SIZE as u32 * ROWS, TILE_SIZE as u32 * COLS)
                 .with_scale_factor_override(1.0),
             ..default()
         }),
