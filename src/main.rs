@@ -4,14 +4,15 @@ mod consts;
 mod pieces;
 use pieces::*;
 
-use crate::consts::{COLS, ROWS, TILE_SIZE};
+use crate::consts::{COLS, FALL_SPEED_UP, ROWS, TILE_SIZE};
 
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(get_window_settings()))
         .add_systems(Startup, setup)
         .add_systems(Update, handle_input)
-        // .add_systems(Update, apply_gravity)
+        .add_systems(Update, (advance_timer, apply_gravity).chain())
+        .add_systems(Update, bounds)
         // .add_systems(Update, update_random_field)
         .run();
 }
@@ -24,13 +25,16 @@ fn setup(
     commands.spawn((
         Camera2d,
         Transform::from_xyz(
-            TILE_SIZE * ROWS as f32 / 2.0,
-            -TILE_SIZE * COLS as f32 / 2.0,
+            TILE_SIZE * COLS as f32 / 2.0,
+            -TILE_SIZE * ROWS as f32 / 2.0,
             0.0,
         ),
     ));
 
-    commands.insert_resource(Tick(Timer::from_seconds(1.0, TimerMode::Repeating)));
+    commands.insert_resource(Tick {
+        timer: Timer::from_seconds(1.0, TimerMode::Repeating),
+        mult: 1.0,
+    });
 
     let current_shape = LShape::new(&mut meshes);
     let mesh_handle = current_shape.get_mesh().to_owned();
@@ -75,16 +79,26 @@ fn handle_input(
     }
 }
 
-fn apply_gravity(
-    time: Res<Time>,
-    mut timer: ResMut<Tick>,
-    mut query: Query<&mut Transform, With<CurrentShapeTag>>,
-) {
-    let mut transform = query.single_mut().unwrap();
+fn advance_timer(time: Res<Time>, mut tick: ResMut<Tick>) {
+    let scaled_delta = time.delta().mul_f64(tick.mult);
 
-    if timer.0.tick(time.delta()).just_finished() {
+    tick.timer.tick(scaled_delta);
+    tick.mult += FALL_SPEED_UP;
+}
+
+fn apply_gravity(tick: ResMut<Tick>, mut query: Query<&mut Transform, With<CurrentShapeTag>>) {
+    if tick.timer.just_finished() {
+        let mut transform = query.single_mut().unwrap();
         transform.translation.y -= TILE_SIZE;
     };
+}
+
+fn bounds(mut query: Query<&mut Transform, With<CurrentShapeTag>>) {
+    let mut transform = query.single_mut().unwrap();
+
+    if transform.translation.y < -(TILE_SIZE * ROWS as f32) {
+        transform.translation.y = 0.0;
+    }
 }
 
 #[derive(Component)]
@@ -94,7 +108,10 @@ struct CurrentShapeTag;
 struct CurrentShape(Box<dyn Shape + Send + Sync>);
 
 #[derive(Resource)]
-struct Tick(Timer);
+struct Tick {
+    timer: Timer,
+    mult: f64,
+}
 
 // use rand::prelude::*;
 //
@@ -151,7 +168,7 @@ struct Tick(Timer);
 fn get_window_settings() -> WindowPlugin {
     WindowPlugin {
         primary_window: Some(Window {
-            resolution: WindowResolution::new(TILE_SIZE as u32 * ROWS, TILE_SIZE as u32 * COLS)
+            resolution: WindowResolution::new(TILE_SIZE as u32 * COLS, TILE_SIZE as u32 * ROWS)
                 .with_scale_factor_override(1.0),
             ..default()
         }),
