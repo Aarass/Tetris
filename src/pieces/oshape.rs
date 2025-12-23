@@ -6,7 +6,7 @@ use bevy::{
 
 use crate::{
     consts::TILE_SIZE,
-    pieces::{Shape, Table},
+    pieces::{Piece, Table},
 };
 
 const O0: Table = [[1, 1, 0, 0], [1, 1, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]];
@@ -38,7 +38,7 @@ impl OShape {
     }
 }
 
-impl Shape for OShape {
+impl Piece for OShape {
     fn rotate_cw(&mut self) {}
     fn rotate_ccw(&mut self) {}
 

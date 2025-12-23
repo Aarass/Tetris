@@ -6,7 +6,7 @@ use bevy::{
 
 use crate::{
     consts::TILE_SIZE,
-    pieces::{Shape, Table},
+    pieces::{Piece, Table},
 };
 
 const I1: Table = [[1, 1, 1, 1], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]];
@@ -60,7 +60,7 @@ impl IShape {
     }
 }
 
-impl Shape for IShape {
+impl Piece for IShape {
     fn rotate_cw(&mut self) {
         if self.i == 0 {
             self.i = TABLES.len() - 1;

@@ -5,6 +5,7 @@ mod pieces;
 use pieces::*;
 
 use crate::consts::{COLS, FALL_SPEED_UP, ROWS, TILE_SIZE};
+use rand::prelude::*;
 
 fn main() {
     App::new()
@@ -12,15 +13,17 @@ fn main() {
         .add_systems(Startup, setup)
         .add_systems(Update, handle_input)
         .add_systems(Update, (advance_timer, apply_gravity).chain())
+        // .add_systems(Update, check_for_collision)
         .add_systems(Update, bounds)
+        .add_systems(Update, create_piece)
         // .add_systems(Update, update_random_field)
         .run();
 }
 
 fn setup(
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
+    // mut meshes: ResMut<Assets<Mesh>>,
+    // mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     commands.spawn((
         Camera2d,
@@ -31,24 +34,39 @@ fn setup(
         ),
     ));
 
+    commands.insert_resource(PieceFactory {});
+
     commands.insert_resource(Tick {
         timer: Timer::from_seconds(1.0, TimerMode::Repeating),
         mult: 1.0,
     });
 
-    let current_shape = LShape::new(&mut meshes);
-    let mesh_handle = current_shape.get_mesh().to_owned();
+    commands.insert_resource(CurrentPieceHolder(None));
 
-    commands.insert_resource(CurrentShape(Box::new(current_shape)));
-
-    let material = materials.add(Color::linear_rgb(1.0, 0.3, 0.1));
-
-    commands.spawn((
-        Mesh2d(mesh_handle),
-        MeshMaterial2d(material),
-        Transform::from_xyz(0.0, 0.0, 0.0),
-        CurrentShapeTag,
-    ));
+    // if false {
+    //     let current_piece = LShape::new(&mut meshes);
+    //     let mesh_handle = current_piece.get_mesh().to_owned();
+    //
+    //     // commands.insert_resource(CurrentPiece(Box::new(current_piece)));
+    //
+    //     let material = materials.add(Color::linear_rgb(1.0, 0.3, 0.1));
+    //
+    //     commands.spawn((
+    //         Mesh2d(mesh_handle),
+    //         MeshMaterial2d(material.clone()),
+    //         Transform::from_xyz(0.0, 0.0, 0.0),
+    //         CurrentPieceTag,
+    //     ));
+    //
+    //     let dumb_piece = IShape::new(&mut meshes);
+    //     let mesh_handle = dumb_piece.get_mesh().to_owned();
+    //
+    //     commands.spawn((
+    //         Mesh2d(mesh_handle),
+    //         MeshMaterial2d(material.clone()),
+    //         Transform::from_xyz(TILE_SIZE * 4.0, -TILE_SIZE * 3.0, 0.0),
+    //     ));
+    // }
 
     // let matrix = Matrix::try_new(10, 20).unwrap();
     // commands.insert_resource(matrix);
@@ -56,26 +74,37 @@ fn setup(
 
 fn handle_input(
     input: Res<ButtonInput<KeyCode>>,
-    mut shape: ResMut<CurrentShape>,
-    mut query: Query<&mut Mesh2d, With<CurrentShapeTag>>,
+    mut holder: ResMut<CurrentPieceHolder>,
+    mut query: Query<(&mut Mesh2d, &mut Transform), With<CurrentPieceTag>>,
 ) {
-    if input.pressed(KeyCode::KeyZ) && input.pressed(KeyCode::KeyX) {
+    let Some(current_piece) = holder.0.as_mut() else {
         return;
+    };
+
+    let Ok((mut mesh_comp, transform)) = query.single_mut() else {
+        return;
+    };
+
+    if !(input.pressed(KeyCode::KeyZ) && input.pressed(KeyCode::KeyX)) {
+        if input.just_pressed(KeyCode::KeyZ) {
+            current_piece.rotate_ccw();
+        }
+
+        if input.just_pressed(KeyCode::KeyX) {
+            current_piece.rotate_cw();
+        }
+
+        if input.just_pressed(KeyCode::KeyZ) || input.just_pressed(KeyCode::KeyX) {
+            *mesh_comp = Mesh2d(current_piece.get_mesh().to_owned());
+        }
     }
 
-    if input.just_pressed(KeyCode::KeyZ) {
-        shape.0.rotate_ccw();
-    }
-
-    if input.just_pressed(KeyCode::KeyX) {
-        shape.0.rotate_cw();
-    }
-
-    if input.just_pressed(KeyCode::KeyZ) || input.just_pressed(KeyCode::KeyX) {
-        let mesh_handle = shape.0.get_mesh();
-
-        let mut mesh_comp = query.single_mut().unwrap();
-        *mesh_comp = Mesh2d(mesh_handle.to_owned());
+    if !(input.pressed(KeyCode::KeyH) && input.pressed(KeyCode::KeyL)) {
+        if input.just_pressed(KeyCode::KeyH) {
+            move_piece(transform, Direction::Left);
+        } else if input.just_pressed(KeyCode::KeyL) {
+            move_piece(transform, Direction::Right);
+        }
     }
 }
 
@@ -86,31 +115,106 @@ fn advance_timer(time: Res<Time>, mut tick: ResMut<Tick>) {
     tick.mult += FALL_SPEED_UP;
 }
 
-fn apply_gravity(tick: ResMut<Tick>, mut query: Query<&mut Transform, With<CurrentShapeTag>>) {
+fn apply_gravity(tick: ResMut<Tick>, mut query: Query<&mut Transform, With<CurrentPieceTag>>) {
     if tick.timer.just_finished() {
-        let mut transform = query.single_mut().unwrap();
-        transform.translation.y -= TILE_SIZE;
+        if let Ok(transform) = query.single_mut() {
+            move_piece(transform, Direction::Down);
+        }
     };
 }
 
-fn bounds(mut query: Query<&mut Transform, With<CurrentShapeTag>>) {
-    let mut transform = query.single_mut().unwrap();
-
-    if transform.translation.y < -(TILE_SIZE * ROWS as f32) {
-        transform.translation.y = 0.0;
+fn bounds(
+    mut commands: Commands,
+    mut holder: ResMut<CurrentPieceHolder>,
+    mut query: Query<(Entity, &mut Transform), With<CurrentPieceTag>>,
+) {
+    if let Some(_) = holder.0.as_ref() {
+        if let Ok((entity, transform)) = query.single_mut() {
+            if transform.translation.y < -(TILE_SIZE * (ROWS - 3) as f32) {
+                holder.0 = None;
+                commands.entity(entity).remove::<CurrentPieceTag>();
+            }
+        }
     }
 }
 
+fn create_piece(
+    mut commands: Commands,
+    mut holder: ResMut<CurrentPieceHolder>,
+    mut factory: ResMut<PieceFactory>,
+    meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+) {
+    if let Some(_) = holder.0 {
+        return;
+    }
+
+    let piece = factory.create_piece(meshes);
+    let mesh_handle = piece.get_mesh().to_owned();
+
+    let material = materials.add(get_random_color());
+
+    commands.spawn((
+        Mesh2d(mesh_handle),
+        MeshMaterial2d(material.clone()),
+        Transform::from_xyz(0.0, 0.0, 0.0),
+        CurrentPieceTag,
+    ));
+
+    holder.0 = Some(piece);
+}
+
+// fn check_for_collision(
+//     tick: ResMut<Tick>,
+//     mut query: Query<&mut Transform, With<CurrentPieceTag>>,
+// ) {
+// }
+
 #[derive(Component)]
-struct CurrentShapeTag;
+struct CurrentPieceTag;
 
 #[derive(Resource)]
-struct CurrentShape(Box<dyn Shape + Send + Sync>);
+struct CurrentPieceHolder(Option<PieceType>);
+
+#[derive(Resource)]
+struct PieceFactory();
+
+impl PieceFactory {
+    fn create_piece(&mut self, mut meshes: ResMut<Assets<Mesh>>) -> PieceType {
+        let mut rng = rand::rng();
+
+        match rng.random_range(0..=5) {
+            0 => Box::new(OShape::new(&mut meshes)),
+            1 => Box::new(IShape::new(&mut meshes)),
+            2 => Box::new(LShape::new(&mut meshes)),
+            3 => Box::new(TShape::new(&mut meshes)),
+            4 => Box::new(SShape::new(&mut meshes)),
+            5 => Box::new(ZShape::new(&mut meshes)),
+            _ => panic!(),
+        }
+    }
+}
+
+fn get_random_color() -> Color {
+    let mut rng = rand::rng();
+
+    Color::linear_rgb(
+        rng.random_range(0.0..=1.0),
+        rng.random_range(0.0..=1.0),
+        rng.random_range(0.0..=1.0),
+    )
+}
 
 #[derive(Resource)]
 struct Tick {
     timer: Timer,
     mult: f64,
+}
+
+enum Direction {
+    Left,
+    Right,
+    Down,
 }
 
 // use rand::prelude::*;
@@ -164,6 +268,25 @@ struct Tick {
 //         self.elements[col][row] = 0;
 //     }
 // }
+
+// Dodaj ovde "vece" parametre
+// Tako da mozes da dodas neku funkciju on_piece_move
+// i onda da imas sve sto ti treba da joj prosledis
+fn move_piece(mut transform: Mut<'_, Transform>, direction: Direction) {
+    match direction {
+        Direction::Left => {
+            transform.translation.x -= TILE_SIZE;
+        }
+        Direction::Right => {
+            transform.translation.x += TILE_SIZE;
+        }
+        Direction::Down => {
+            transform.translation.y -= TILE_SIZE;
+        }
+    }
+
+    dbg!(get_piece_indicies(&transform));
+}
 
 fn get_window_settings() -> WindowPlugin {
     WindowPlugin {
