@@ -1,10 +1,15 @@
 use bevy::{prelude::*, window::WindowResolution};
 
 mod consts;
+mod matrix;
 mod pieces;
+
 use pieces::*;
 
-use crate::consts::{COLS, FALL_SPEED_UP, ROWS, TILE_SIZE};
+use crate::{
+    consts::{COLS, FALL_SPEED_UP, ROWS, TILE_SIZE},
+    matrix::{Matrix, check_for_colision, fix_piece},
+};
 use rand::prelude::*;
 
 fn main() {
@@ -14,17 +19,13 @@ fn main() {
         .add_systems(Update, handle_input)
         .add_systems(Update, (advance_timer, apply_gravity).chain())
         // .add_systems(Update, check_for_collision)
-        .add_systems(Update, bounds)
+        // .add_systems(Update, bounds)
         .add_systems(Update, create_piece)
         // .add_systems(Update, update_random_field)
         .run();
 }
 
-fn setup(
-    mut commands: Commands,
-    // mut meshes: ResMut<Assets<Mesh>>,
-    // mut materials: ResMut<Assets<ColorMaterial>>,
-) {
+fn setup(mut commands: Commands) {
     commands.spawn((
         Camera2d,
         Transform::from_xyz(
@@ -42,46 +43,28 @@ fn setup(
     });
 
     commands.insert_resource(CurrentPieceHolder(None));
-
-    // if false {
-    //     let current_piece = LShape::new(&mut meshes);
-    //     let mesh_handle = current_piece.get_mesh().to_owned();
-    //
-    //     // commands.insert_resource(CurrentPiece(Box::new(current_piece)));
-    //
-    //     let material = materials.add(Color::linear_rgb(1.0, 0.3, 0.1));
-    //
-    //     commands.spawn((
-    //         Mesh2d(mesh_handle),
-    //         MeshMaterial2d(material.clone()),
-    //         Transform::from_xyz(0.0, 0.0, 0.0),
-    //         CurrentPieceTag,
-    //     ));
-    //
-    //     let dumb_piece = IShape::new(&mut meshes);
-    //     let mesh_handle = dumb_piece.get_mesh().to_owned();
-    //
-    //     commands.spawn((
-    //         Mesh2d(mesh_handle),
-    //         MeshMaterial2d(material.clone()),
-    //         Transform::from_xyz(TILE_SIZE * 4.0, -TILE_SIZE * 3.0, 0.0),
-    //     ));
-    // }
-
-    // let matrix = Matrix::try_new(10, 20).unwrap();
-    // commands.insert_resource(matrix);
+    commands.insert_resource(Matrix::try_new(COLS as usize, ROWS as usize).unwrap());
 }
 
 fn handle_input(
     input: Res<ButtonInput<KeyCode>>,
     mut holder: ResMut<CurrentPieceHolder>,
     mut query: Query<(&mut Mesh2d, &mut Transform), With<CurrentPieceTag>>,
+    mut tick: ResMut<Tick>,
 ) {
+    if input.just_pressed(KeyCode::KeyP) {
+        if tick.mult == 0.0 {
+            tick.mult = 1.0;
+        } else {
+            tick.mult = 0.0;
+        }
+    }
+
     let Some(current_piece) = holder.0.as_mut() else {
         return;
     };
 
-    let Ok((mut mesh_comp, transform)) = query.single_mut() else {
+    let Ok((mut mesh_comp, mut transform)) = query.single_mut() else {
         return;
     };
 
@@ -101,9 +84,9 @@ fn handle_input(
 
     if !(input.pressed(KeyCode::KeyH) && input.pressed(KeyCode::KeyL)) {
         if input.just_pressed(KeyCode::KeyH) {
-            move_piece(transform, Direction::Left);
+            move_piece(&mut transform, Direction::Left);
         } else if input.just_pressed(KeyCode::KeyL) {
-            move_piece(transform, Direction::Right);
+            move_piece(&mut transform, Direction::Right);
         }
     }
 }
@@ -112,17 +95,49 @@ fn advance_timer(time: Res<Time>, mut tick: ResMut<Tick>) {
     let scaled_delta = time.delta().mul_f64(tick.mult);
 
     tick.timer.tick(scaled_delta);
-    tick.mult += FALL_SPEED_UP;
+
+    // tick.mult += FALL_SPEED_UP;
+    // TODO hack za laki pause
+    if tick.mult > 0.1 {
+        tick.mult += FALL_SPEED_UP;
+    }
 }
 
-fn apply_gravity(tick: ResMut<Tick>, mut query: Query<&mut Transform, With<CurrentPieceTag>>) {
+fn apply_gravity(
+    mut commands: Commands,
+    tick: ResMut<Tick>,
+    mut query: Query<(Entity, &mut Transform), With<CurrentPieceTag>>,
+    mut matrix: ResMut<Matrix>,
+    mut piece_holder: ResMut<CurrentPieceHolder>,
+) {
     if tick.timer.just_finished() {
-        if let Ok(transform) = query.single_mut() {
-            move_piece(transform, Direction::Down);
+        if let Ok((entity, mut transform)) = query.single_mut() {
+            move_piece(&mut transform, Direction::Down);
+
+            let piece = piece_holder.0.as_ref().unwrap();
+
+            let piece_table = piece.get_table();
+            let piece_indicies = get_piece_indicies(&transform);
+
+            let collided = check_for_colision(&matrix, piece_table, &piece_indicies);
+
+            if collided {
+                move_piece(&mut transform, Direction::Up);
+
+                let recalculated_indicies = get_piece_indicies(&transform);
+                dbg!(&piece_indicies, &recalculated_indicies);
+                fix_piece(&mut matrix, piece_table, &recalculated_indicies);
+
+                print!("{}", matrix.as_ref());
+
+                piece_holder.0 = None;
+                commands.entity(entity).remove::<CurrentPieceTag>();
+            }
         }
     };
 }
 
+#[allow(dead_code)]
 fn bounds(
     mut commands: Commands,
     mut holder: ResMut<CurrentPieceHolder>,
@@ -174,13 +189,13 @@ fn create_piece(
 struct CurrentPieceTag;
 
 #[derive(Resource)]
-struct CurrentPieceHolder(Option<PieceType>);
+struct CurrentPieceHolder(Option<BoxedPiece>);
 
 #[derive(Resource)]
 struct PieceFactory();
 
 impl PieceFactory {
-    fn create_piece(&mut self, mut meshes: ResMut<Assets<Mesh>>) -> PieceType {
+    fn create_piece(&mut self, mut meshes: ResMut<Assets<Mesh>>) -> BoxedPiece {
         let mut rng = rand::rng();
 
         match rng.random_range(0..=5) {
@@ -190,7 +205,7 @@ impl PieceFactory {
             3 => Box::new(TShape::new(&mut meshes)),
             4 => Box::new(SShape::new(&mut meshes)),
             5 => Box::new(ZShape::new(&mut meshes)),
-            _ => panic!(),
+            _ => unreachable!(),
         }
     }
 }
@@ -214,6 +229,7 @@ struct Tick {
 enum Direction {
     Left,
     Right,
+    Up,
     Down,
 }
 
@@ -230,49 +246,10 @@ enum Direction {
 //     matrix.clear(0, 0);
 // }
 
-// #[derive(Resource)]
-// struct Matrix {
-//     elements: Vec<Vec<u8>>,
-// }
-
-// const MIN_WIDTH: usize = 7;
-// const MIN_HEIGHT: usize = 10;
-
-// impl Matrix {
-//     fn try_new(width: usize, height: usize) -> Option<Self> {
-//         if width < MIN_WIDTH {
-//             return None;
-//         }
-//
-//         if height < MIN_HEIGHT {
-//             return None;
-//         };
-//
-//         Some(Matrix {
-//             elements: vec![vec![0u8; width]; height],
-//         })
-//     }
-//
-//     fn height(&self) -> usize {
-//         self.elements.len()
-//     }
-//
-//     fn width(&self) -> usize {
-//         self.elements.first().unwrap().len()
-//     }
-//
-//     fn set(&mut self, col: usize, row: usize) {
-//         self.elements[col][row] = 1;
-//     }
-//     fn clear(&mut self, col: usize, row: usize) {
-//         self.elements[col][row] = 0;
-//     }
-// }
-
 // Dodaj ovde "vece" parametre
 // Tako da mozes da dodas neku funkciju on_piece_move
 // i onda da imas sve sto ti treba da joj prosledis
-fn move_piece(mut transform: Mut<'_, Transform>, direction: Direction) {
+fn move_piece(transform: &mut Transform, direction: Direction) {
     match direction {
         Direction::Left => {
             transform.translation.x -= TILE_SIZE;
@@ -283,9 +260,12 @@ fn move_piece(mut transform: Mut<'_, Transform>, direction: Direction) {
         Direction::Down => {
             transform.translation.y -= TILE_SIZE;
         }
+        Direction::Up => {
+            transform.translation.y += TILE_SIZE;
+        }
     }
 
-    dbg!(get_piece_indicies(&transform));
+    // dbg!(get_piece_indicies(&transform));
 }
 
 fn get_window_settings() -> WindowPlugin {

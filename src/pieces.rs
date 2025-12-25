@@ -8,12 +8,7 @@ mod zshape;
 
 pub mod mesh_cache;
 
-use bevy::{
-    asset::Handle,
-    math::{Vec2, Vec3Swizzles},
-    mesh::Mesh,
-    transform::components::Transform,
-};
+use bevy::{asset::Handle, mesh::Mesh, transform::components::Transform};
 
 pub use ishape::IShape;
 pub use jshape::JShape;
@@ -25,7 +20,7 @@ pub use zshape::ZShape;
 
 use crate::consts::TILE_SIZE;
 
-pub type PieceType = Box<dyn Piece + Send + Sync>;
+pub type BoxedPiece = Box<dyn Piece + Send + Sync>;
 
 pub trait Piece {
     fn rotate_cw(&mut self);
@@ -35,22 +30,16 @@ pub trait Piece {
 }
 
 pub fn get_piece_indicies(transform: &Transform) -> PieceIndicies {
-    (transform.translation.xy().abs() / TILE_SIZE).into()
+    PieceIndicies {
+        i: (-transform.translation.y / TILE_SIZE) as i32,
+        j: (transform.translation.x / TILE_SIZE) as i32,
+    }
 }
 
 pub type Table = [[u8; 4]; 4];
 
 #[derive(Debug)]
 pub struct PieceIndicies {
-    pub i: usize,
-    pub j: usize,
-}
-
-impl Into<PieceIndicies> for Vec2 {
-    fn into(self) -> PieceIndicies {
-        PieceIndicies {
-            i: self.x as usize,
-            j: self.y as usize,
-        }
-    }
+    pub i: i32,
+    pub j: i32,
 }
