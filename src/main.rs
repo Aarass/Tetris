@@ -1,13 +1,16 @@
 use bevy::{prelude::*, window::WindowResolution};
 
 mod consts;
+mod events;
 mod matrix;
 mod pieces;
 
+use bevy_inspector_egui::{bevy_egui::EguiPlugin, quick::WorldInspectorPlugin};
 use pieces::*;
 
 use crate::{
     consts::{COLS, FALL_SPEED_UP, ROWS, TILE_SIZE},
+    events::MovePiece,
     matrix::{Matrix, check_for_colision, fix_piece},
 };
 use rand::prelude::*;
@@ -15,6 +18,8 @@ use rand::prelude::*;
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(get_window_settings()))
+        .add_plugins(EguiPlugin::default())
+        .add_plugins(WorldInspectorPlugin::new())
         .add_systems(Startup, setup)
         .add_systems(Update, handle_input)
         .add_systems(Update, (advance_timer, apply_gravity).chain())
@@ -27,6 +32,7 @@ fn main() {
 
 fn setup(mut commands: Commands) {
     commands.spawn((
+        Name::new("Camera"),
         Camera2d,
         Transform::from_xyz(
             TILE_SIZE * COLS as f32 / 2.0,
@@ -51,6 +57,7 @@ fn handle_input(
     mut holder: ResMut<CurrentPieceHolder>,
     mut query: Query<(&mut Mesh2d, &mut Transform), With<CurrentPieceTag>>,
     mut tick: ResMut<Tick>,
+    mut writer: MessageWriter<MovePiece>,
 ) {
     if input.just_pressed(KeyCode::KeyP) {
         if tick.mult == 0.0 {
@@ -84,11 +91,42 @@ fn handle_input(
 
     if !(input.pressed(KeyCode::KeyH) && input.pressed(KeyCode::KeyL)) {
         if input.just_pressed(KeyCode::KeyH) {
-            move_piece(&mut transform, Direction::Left);
+            writer.write(MovePiece(Direction::Left));
         } else if input.just_pressed(KeyCode::KeyL) {
-            move_piece(&mut transform, Direction::Right);
+            writer.write(MovePiece(Direction::Right));
         }
     }
+}
+
+fn handle_piece_movement(
+    mut reader: MessageReader<MovePiece>,
+    mut query: Query<&mut Transform, With<CurrentPieceTag>>,
+    mut matrix: ResMut<Matrix>,
+    mut piece_holder: ResMut<CurrentPieceHolder>,
+) {
+    let Ok(mut transform) = query.single_mut() else {
+        return;
+    };
+
+    for ev in reader.read() {
+        match &ev.0 {
+            Direction::Left => {
+                transform.translation.x -= TILE_SIZE;
+            }
+            Direction::Right => {
+                transform.translation.x += TILE_SIZE;
+            }
+            Direction::Down => {
+                transform.translation.y -= TILE_SIZE;
+            }
+            Direction::Up => {
+                transform.translation.y += TILE_SIZE;
+            }
+        }
+    }
+
+    let piece_indicies = get_piece_indicies(&transform);
+    check_for_colision(matrix, table, piece_indicies)
 }
 
 fn advance_timer(time: Res<Time>, mut tick: ResMut<Tick>) {
@@ -170,6 +208,7 @@ fn create_piece(
     let material = materials.add(get_random_color());
 
     commands.spawn((
+        Name::new("Piece"),
         Mesh2d(mesh_handle),
         MeshMaterial2d(material.clone()),
         Transform::from_xyz(0.0, 0.0, 0.0),
@@ -276,5 +315,11 @@ fn get_window_settings() -> WindowPlugin {
             ..default()
         }),
         ..default()
+    }
+}
+
+fn debug_levelups(mut ev_levelup: MessageReader<MovePiece>) {
+    for ev in ev_levelup.read() {
+        eprintln!("Entity {:?} leveled up!", ev.0);
     }
 }
