@@ -16,18 +16,22 @@ use crate::{
 use rand::prelude::*;
 
 fn main() {
-    App::new()
-        .add_plugins(DefaultPlugins.set(get_window_settings()))
-        .add_plugins(EguiPlugin::default())
-        .add_plugins(WorldInspectorPlugin::new())
+    let mut app = App::new();
+    app.add_plugins(DefaultPlugins.set(get_window_settings()))
+        .add_message::<MovePiece>()
         .add_systems(Startup, setup)
-        .add_systems(Update, handle_input)
+        .add_systems(Update, (handle_input, handle_piece_movement))
         .add_systems(Update, (advance_timer, apply_gravity).chain())
         // .add_systems(Update, check_for_collision)
         // .add_systems(Update, bounds)
-        .add_systems(Update, create_piece)
-        // .add_systems(Update, update_random_field)
-        .run();
+        .add_systems(Update, create_piece);
+    // .add_systems(Update, update_random_field)
+
+    #[cfg(debug)]
+    app.add_plugins(EguiPlugin::default())
+        .add_plugins(WorldInspectorPlugin::new());
+
+    app.run();
 }
 
 fn setup(mut commands: Commands) {
@@ -48,16 +52,14 @@ fn setup(mut commands: Commands) {
         mult: 1.0,
     });
 
-    commands.insert_resource(CurrentPieceHolder(None));
     commands.insert_resource(Matrix::try_new(COLS as usize, ROWS as usize).unwrap());
 }
 
 fn handle_input(
     input: Res<ButtonInput<KeyCode>>,
-    mut holder: ResMut<CurrentPieceHolder>,
-    mut query: Query<(&mut Mesh2d, &mut Transform), With<CurrentPieceTag>>,
+    mut query: Query<(&mut Mesh2d, &mut CurrentPiece)>,
     mut tick: ResMut<Tick>,
-    mut writer: MessageWriter<MovePiece>,
+    mut message_writer: MessageWriter<MovePiece>,
 ) {
     if input.just_pressed(KeyCode::KeyP) {
         if tick.mult == 0.0 {
@@ -67,66 +69,76 @@ fn handle_input(
         }
     }
 
-    let Some(current_piece) = holder.0.as_mut() else {
-        return;
-    };
-
-    let Ok((mut mesh_comp, mut transform)) = query.single_mut() else {
+    let Ok((mut mesh_comp, mut current_piece)) = query.single_mut() else {
         return;
     };
 
     if !(input.pressed(KeyCode::KeyZ) && input.pressed(KeyCode::KeyX)) {
         if input.just_pressed(KeyCode::KeyZ) {
-            current_piece.rotate_ccw();
+            current_piece.0.rotate_ccw();
         }
 
         if input.just_pressed(KeyCode::KeyX) {
-            current_piece.rotate_cw();
+            current_piece.0.rotate_cw();
         }
 
         if input.just_pressed(KeyCode::KeyZ) || input.just_pressed(KeyCode::KeyX) {
-            *mesh_comp = Mesh2d(current_piece.get_mesh().to_owned());
+            *mesh_comp = Mesh2d(current_piece.0.get_mesh().to_owned());
         }
     }
 
     if !(input.pressed(KeyCode::KeyH) && input.pressed(KeyCode::KeyL)) {
         if input.just_pressed(KeyCode::KeyH) {
-            writer.write(MovePiece(Direction::Left));
+            message_writer.write(MovePiece(Direction::Left));
         } else if input.just_pressed(KeyCode::KeyL) {
-            writer.write(MovePiece(Direction::Right));
+            message_writer.write(MovePiece(Direction::Right));
         }
     }
 }
 
 fn handle_piece_movement(
+    mut commands: Commands,
     mut reader: MessageReader<MovePiece>,
-    mut query: Query<&mut Transform, With<CurrentPieceTag>>,
+    mut query: Query<(Entity, &mut Transform, &CurrentPiece)>,
     mut matrix: ResMut<Matrix>,
-    mut piece_holder: ResMut<CurrentPieceHolder>,
 ) {
-    let Ok(mut transform) = query.single_mut() else {
+    let Ok((entity, mut transform, current_piece)) = query.single_mut() else {
         return;
     };
 
     for ev in reader.read() {
+        let mut new_position = transform.translation.clone();
+
         match &ev.0 {
             Direction::Left => {
-                transform.translation.x -= TILE_SIZE;
+                new_position -= TILE_SIZE;
             }
             Direction::Right => {
-                transform.translation.x += TILE_SIZE;
+                new_position += TILE_SIZE;
             }
             Direction::Down => {
-                transform.translation.y -= TILE_SIZE;
+                new_position -= TILE_SIZE;
             }
             Direction::Up => {
-                transform.translation.y += TILE_SIZE;
+                new_position += TILE_SIZE;
             }
         }
-    }
 
-    let piece_indicies = get_piece_indicies(&transform);
-    check_for_colision(matrix, table, piece_indicies)
+        let piece_table = current_piece.0.get_table();
+        let piece_indicies = get_piece_indicies(&new_position);
+
+        let collided = check_for_colision(&matrix, piece_table, &piece_indicies);
+
+        if collided {
+            let recalculated_indicies = get_piece_indicies(&transform.translation);
+            fix_piece(&mut matrix, piece_table, &recalculated_indicies);
+            commands.entity(entity).remove::<CurrentPiece>();
+
+            print!("{}", matrix.as_ref());
+        } else {
+            transform.translation = new_position;
+        }
+    }
 }
 
 fn advance_timer(time: Res<Time>, mut tick: ResMut<Tick>) {
@@ -141,81 +153,42 @@ fn advance_timer(time: Res<Time>, mut tick: ResMut<Tick>) {
     }
 }
 
-fn apply_gravity(
-    mut commands: Commands,
-    tick: ResMut<Tick>,
-    mut query: Query<(Entity, &mut Transform), With<CurrentPieceTag>>,
-    mut matrix: ResMut<Matrix>,
-    mut piece_holder: ResMut<CurrentPieceHolder>,
-) {
+fn apply_gravity(tick: ResMut<Tick>, mut message_writer: MessageWriter<MovePiece>) {
     if tick.timer.just_finished() {
-        if let Ok((entity, mut transform)) = query.single_mut() {
-            move_piece(&mut transform, Direction::Down);
-
-            let piece = piece_holder.0.as_ref().unwrap();
-
-            let piece_table = piece.get_table();
-            let piece_indicies = get_piece_indicies(&transform);
-
-            let collided = check_for_colision(&matrix, piece_table, &piece_indicies);
-
-            if collided {
-                move_piece(&mut transform, Direction::Up);
-
-                let recalculated_indicies = get_piece_indicies(&transform);
-                dbg!(&piece_indicies, &recalculated_indicies);
-                fix_piece(&mut matrix, piece_table, &recalculated_indicies);
-
-                print!("{}", matrix.as_ref());
-
-                piece_holder.0 = None;
-                commands.entity(entity).remove::<CurrentPieceTag>();
-            }
-        }
+        message_writer.write(MovePiece(Direction::Down));
     };
 }
 
-#[allow(dead_code)]
-fn bounds(
-    mut commands: Commands,
-    mut holder: ResMut<CurrentPieceHolder>,
-    mut query: Query<(Entity, &mut Transform), With<CurrentPieceTag>>,
-) {
-    if let Some(_) = holder.0.as_ref() {
-        if let Ok((entity, transform)) = query.single_mut() {
-            if transform.translation.y < -(TILE_SIZE * (ROWS - 3) as f32) {
-                holder.0 = None;
-                commands.entity(entity).remove::<CurrentPieceTag>();
-            }
-        }
-    }
-}
+// #[allow(dead_code)]
+// fn bounds(mut commands: Commands, mut query: Query<(Entity, &mut Transform), With<CurrentPiece>>) {
+//     if let Ok((entity, transform)) = query.single_mut() {
+//         if transform.translation.y < -(TILE_SIZE * (ROWS - 3) as f32) {
+//             holder.0 = None;
+//             commands.entity(entity).remove::<CurrentPiece>();
+//         }
+//     }
+// }
 
 fn create_piece(
+    query: Query<&CurrentPiece>,
     mut commands: Commands,
-    mut holder: ResMut<CurrentPieceHolder>,
     mut factory: ResMut<PieceFactory>,
     meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
-    if let Some(_) = holder.0 {
+    if let Ok(_) = query.single() {
         return;
     }
 
     let piece = factory.create_piece(meshes);
-    let mesh_handle = piece.get_mesh().to_owned();
-
-    let material = materials.add(get_random_color());
 
     commands.spawn((
         Name::new("Piece"),
-        Mesh2d(mesh_handle),
-        MeshMaterial2d(material.clone()),
+        Mesh2d(piece.get_mesh().to_owned()),
+        MeshMaterial2d(materials.add(get_random_color())),
         Transform::from_xyz(0.0, 0.0, 0.0),
-        CurrentPieceTag,
+        CurrentPiece(piece),
     ));
-
-    holder.0 = Some(piece);
 }
 
 // fn check_for_collision(
@@ -225,10 +198,7 @@ fn create_piece(
 // }
 
 #[derive(Component)]
-struct CurrentPieceTag;
-
-#[derive(Resource)]
-struct CurrentPieceHolder(Option<BoxedPiece>);
+struct CurrentPiece(BoxedPiece);
 
 #[derive(Resource)]
 struct PieceFactory();
@@ -315,11 +285,5 @@ fn get_window_settings() -> WindowPlugin {
             ..default()
         }),
         ..default()
-    }
-}
-
-fn debug_levelups(mut ev_levelup: MessageReader<MovePiece>) {
-    for ev in ev_levelup.read() {
-        eprintln!("Entity {:?} leveled up!", ev.0);
     }
 }

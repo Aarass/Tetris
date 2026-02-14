@@ -8,7 +8,7 @@ mod zshape;
 
 pub mod mesh_cache;
 
-use bevy::{asset::Handle, mesh::Mesh, transform::components::Transform};
+use bevy::{asset::Handle, math::Vec3, mesh::Mesh, transform::components::Transform};
 
 pub use ishape::IShape;
 pub use jshape::JShape;
@@ -29,10 +29,10 @@ pub trait Piece {
     fn get_mesh(&self) -> &Handle<Mesh>;
 }
 
-pub fn get_piece_indicies(transform: &Transform) -> PieceIndicies {
+pub fn get_piece_indicies(translation: &Vec3) -> PieceIndicies {
     PieceIndicies {
-        i: (-transform.translation.y / TILE_SIZE) as i32,
-        j: (transform.translation.x / TILE_SIZE) as i32,
+        i: (-translation.y / TILE_SIZE) as i32,
+        j: (translation.x / TILE_SIZE) as i32,
     }
 }
 
